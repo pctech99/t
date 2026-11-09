@@ -1,5 +1,7 @@
 #!/bin/sh
-# ASUS Tarkin, Skywalker ChromeOS 152.0.7977.132 (16765.51.0).
+# ASUS Tarkin / Skywalker.
+# Builds validees : ChromeOS 152 (16765.51.0, v12keys)
+# et ChromeOS 156 (16836.32.0, v15keys).
 set -eu
 umask 077
 
@@ -48,6 +50,16 @@ read_vpd() {
     vpd -f "$1" -i RO_VPD -l --null-terminated > "$2" 2>>"$log" && [ -s "$2" ]
 }
 
+supported_build() {
+    board=$(sed -n 's/^CHROMEOS_RELEASE_BOARD="\{0,1\}\([^"[:space:]]*\)"\{0,1\}$/\1/p' /etc/lsb-release)
+    version=$(sed -n 's/^CHROMEOS_RELEASE_VERSION="\{0,1\}\([^"[:space:]]*\)"\{0,1\}$/\1/p' /etc/lsb-release)
+    case "$board:$version" in
+        skywalker-signed-mp-v12keys:16765.51.0 | \
+        skywalker-signed-mp-v15keys:16836.32.0) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 diagnose_build() {
     printf '%s\n' '--- Diagnostic Tarkin (lecture seule) ---'
     grep -E '^CHROMEOS_RELEASE_(BOARD|VERSION|CHROME_MILESTONE|BUILD_TYPE)=' /etc/lsb-release || true
@@ -92,11 +104,10 @@ diagnose_build() {
 
 [ "$(id -u)" = 0 ] || die 'Lancer ce script avec sudo sh depuis VT2.'
 command -v crossystem >/dev/null || die 'Outil manquant : crossystem'
+command -v sed >/dev/null || die 'Outil manquant : sed'
 case "$(crossystem hwid)" in TARKIN*) ;; *) die 'Ce script est limite aux ASUS Tarkin.' ;; esac
-grep -Eq '^CHROMEOS_RELEASE_BOARD="?skywalker-signed-mp-v12keys"?$' /etc/lsb-release &&
-    grep -Eq '^CHROMEOS_RELEASE_VERSION="?16765\.51\.0"?$' /etc/lsb-release ||
-    diagnose_build
-for tool in crossystem device_management_client gsctool futility vpd openssl sha256sum dd; do
+supported_build || diagnose_build
+for tool in sed device_management_client gsctool futility vpd openssl sha256sum dd; do
     command -v "$tool" >/dev/null || die "Outil manquant : $tool"
 done
 [ "$(crossystem cros_debug)" = 1 ] || die 'Mode developpeur requis.'
