@@ -48,14 +48,57 @@ read_vpd() {
     vpd -f "$1" -i RO_VPD -l --null-terminated > "$2" 2>>"$log" && [ -s "$2" ]
 }
 
+diagnose_build() {
+    printf '%s\n' '--- Diagnostic Tarkin (lecture seule) ---'
+    grep -E '^CHROMEOS_RELEASE_(BOARD|VERSION|CHROME_MILESTONE|BUILD_TYPE)=' /etc/lsb-release || true
+    for field in fwid cros_debug wpsw_cur; do
+        value=$(crossystem "$field" 2>/dev/null) || value=indisponible
+        printf '%s=%s\n' "$field" "$value"
+    done
+    for tool in device_management_client gsctool futility vpd openssl sha256sum dd; do
+        command -v "$tool" >/dev/null || printf 'Outil manquant : %s\n' "$tool"
+    done
+
+    if command -v futility >/dev/null; then
+        wp=$(software_wp 2>/dev/null) || wp=indisponible
+        printf 'Protection logicielle : %s\n' "$wp"
+        if diag_dir=$(mktemp -d /tmp/tarkin-diag.XXXXXX); then
+            diag_rom=$diag_dir/ap.rom
+            trap 'rm -f "$diag_rom"; rmdir "$diag_dir"' EXIT
+            trap 'exit 1' HUP INT TERM
+            if futility read "$diag_rom" >/dev/null 2>&1; then
+                printf 'Taille de la flash AP (octets) : %s\n' "$(wc -c < "$diag_rom")"
+                if fmap=$(futility dump_fmap -p "$diag_rom" RO_VPD 2>/dev/null) &&
+                    printf '%s\n' "$fmap" | grep -Eq '^RO_VPD [0-9]+ [0-9]+$'; then
+                    printf 'FMAP (zone, offset, taille en octets) : %s\n' "$fmap"
+                else
+                    printf '%s\n' 'FMAP RO_VPD : indisponible'
+                fi
+                if futility gscvd "$diag_rom" >/dev/null 2>&1; then
+                    printf '%s\n' 'GSCVD : OK'
+                else
+                    printf '%s\n' 'GSCVD : verification non confirmee'
+                fi
+            else
+                printf '%s\n' 'Lecture de la flash AP : impossible'
+            fi
+        else
+            printf '%s\n' 'Dossier temporaire prive : indisponible'
+        fi
+    fi
+    printf '%s\n' '--- Fin du diagnostic ---'
+    die 'Build non valide pour l ecriture. Partagez uniquement le diagnostic ci-dessus.'
+}
+
 [ "$(id -u)" = 0 ] || die 'Lancer ce script avec sudo sh depuis VT2.'
-for tool in crossystem device_management_client gsctool futility vpd openssl sha256sum dd; do
-    command -v "$tool" >/dev/null || die "Outil manquant : $tool"
-done
+command -v crossystem >/dev/null || die 'Outil manquant : crossystem'
 case "$(crossystem hwid)" in TARKIN*) ;; *) die 'Ce script est limite aux ASUS Tarkin.' ;; esac
 grep -Eq '^CHROMEOS_RELEASE_BOARD="?skywalker-signed-mp-v12keys"?$' /etc/lsb-release &&
     grep -Eq '^CHROMEOS_RELEASE_VERSION="?16765\.51\.0"?$' /etc/lsb-release ||
-    die 'Installer la recuperation Skywalker 152 (16765.51.0) avant de continuer.'
+    diagnose_build
+for tool in crossystem device_management_client gsctool futility vpd openssl sha256sum dd; do
+    command -v "$tool" >/dev/null || die "Outil manquant : $tool"
+done
 [ "$(crossystem cros_debug)" = 1 ] || die 'Mode developpeur requis.'
 
 backup=/mnt/stateful_partition/tarkin-vt2
